@@ -9,7 +9,7 @@ O resultado de uma execução desta análise se encontra publicado nos seguintes
 http://rpubs.com/fredpolicarpo/read-csv-performance-test
 
 #### LinkedIn
-...
+https://www.linkedin.com/pulse/an%C3%A1lise-de-desempenho-em-leitura-data-frames-com-r-fred-policarpo
 
 ## Como estender esse projeto
 Para colaborar com esse projeto você pode:

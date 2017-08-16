@@ -1,0 +1,212 @@
+---
+title: "Análise de desempenho em leitura de Data Frames com `R`"
+author: "Fred Policarpo"
+date: "16 de Agosto de 2017"
+output:
+  html_document:
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+# Configurações
+Este teste foi realizado em uma máquina com as seguintes especificações:
+
+Configuração | Valor
+------------- | ------------- 
+Sistema Operacional | Ubuntu 16.04.2 LTS 64-bit
+Memória Ram | 16 GB DDR4
+Processador | Intel® Core™ i3-7350K CPU @ 4.20GHz × 4 
+Disco | 40GB SSD  
+R | R version 3.4.1 (2017-06-30) -- "Single Candle"
+
+# Aprendi o read.csv! 
+Uma das primeiras coisas legais que a gente aprende na linguagem [R](https://www.r-project.org/) é carregar um arquivo **csv** em um [data frame](http://www.r-tutor.com/r-introduction/data-frame), para então começar a brincadeira com os dados.
+
+Ao fazer uma busca rápida no Google logo descobri que no `R` é possível fazer isso sem instalar nenhum pacote, através da função nativa `read.csv`, do pacote `utils`(_nativo da linguagem_). **Opa, como é fácil carregar um arquivo csv no `R`!**
+
+> Calma aí amiguinho, você pode fazer isso bem melhor ;)
+
+Meus estudos da linguagem [R](https://www.r-project.org/) iniciaram pelo Google e tutoriais deversos, e depois começei a trilha [Data Scientist with R](https://www.datacamp.com/tracks/data-scientist) da plataforma de cursos [Data Camp](https://www.datacamp.com/) (_na qual eu me encontro aos `67%` da sua conclusão no momento em que escrevo este artigo_).
+
+Dentre tudo o que aprendi até agora, uma coisa chamou  muito a minha atenção: 
+
+> A diferênça de tempo na carga de um arquivo *csv*  entre a função nativa `read.csv` e outras duas funções de terceiros: `read_csv` e `fread`. 
+
+Chamou tanto a minha atenção que resolvi escrever este artigo para compartilhar o aprendizado.
+
+Então vamos medir, comparar e ver o quanto de tempo podemos ganhar nas nossas análises, e consequentimente, nas nossas vidas ;)
+
+# Várias alternativas
+
+Abaixo segue a tabela com as funções, seus pacotes e respectivas versões que irei analisar.
+
+Função | Pacote | Versão
+------------- | ------------- | -------------
+read.csv | [`utils`](https://cran.r-project.org/web/packages/R.utils/index.html) | 3.4.1
+read_csv | [`readr`](https://cran.r-project.org/web/packages/readr/index.html) | 1.1.1
+fread | [`data.table`](https://cran.r-project.org/web/packages/data.table/index.html) | 1.10.4
+
+
+# Medindo o desempenho
+
+Para essa análise iremos utilizar as seguintes bibliotecas:
+
+1. [`purrr`](https://cran.r-project.org/web/packages/purrr/README.html) que fornece um conjunto de funções voltadas à programação funcional;
+2. [`dplyr`](https://cran.r-project.org/web/packages/dplyr/index.html) para uso do operador *pipe* `%>%`; 
+3. [`stringr`](https://cran.r-project.org/web/packages/stringr/index.html) que nos fornece funções utilitarias para trabalho com strings, como operações com *expressões regulares*;
+4. [`knitr`](https://cran.r-project.org/web/packages/knitr/index.html) para visualizar a tabela com as medidas de tempo de uma forma mais elegante;
+
+> **Obs.:** Certamente tudo que é feito com o as funções do `purrr`, do `dplyr` e do `stringr` nos códigos abaixo, poderiam ter sido feitas de forma nativa pelo R, porém com uma sintaxe um pouco mais verbosa
+
+O código abaixo instala as bibliotecas necessárias que estão faltando.
+
+```{r warning=FALSE}
+# Verifica pacotes não instalados
+libs.required = c("readr", "data.table", "purrr", "stringr", "dplyr", "knitr")
+libs.installed = installed.packages()[, 'Package']
+libs.not.installed = sapply(libs.required, function (x) !(x %in% libs.installed))
+
+# Instala as dependências
+if (sum(libs.not.installed) >= 1) {
+  install.packages(libs.required[as.vector(libs.not.installed)])  
+}
+```
+
+Após a instalação das bibliotecas, podemos então carregá-las na sessão.
+
+```{r message=FALSE, results='hide'}
+sapply(libs.required, library , character.only = TRUE)
+```
+
+## Definindo um conjunto de dados para teste
+
+![](http://www.governoaberto.cgu.gov.br/noticias/2016/copy_of_disponivel-2a-fase-da-consulta-publica-do-decreto-do-202a200emarco-civil202c-da-internet/logo-dados-abertos.png)
+
+
+> Os arquivos que usei para este teste estão disponíveis no [Portal Brasileiro de Dados Abertos](http://dados.gov.br). Eles são dados do Ministério da Justiça e segurança pública, referentes à *Rede de Atendimento à Mulher em Situação de Violência*, conforme a tabela abaixo com os links:
+
+Arquivo | Tamanho | Data da versão em que os testes foram executados
+------------- | ------------- | -------------
+[Dados de 2009](http://dados.gov.br/dataset/spm_odm_2009) | 25 MB | 1 de Agosto de 2017, 01:57
+[Dados de 2010](http://dados.gov.br/dataset/spm_odm_2010) | 25 MB | 1 de Agosto de 2017, 01:57 
+[Dados de 2011](http://dados.gov.br/dataset/spm_odm_2011) | 25 MB | 1 de Agosto de 2017, 01:57 
+## Baixando os arquivos
+
+O código abaixo faz o **download** dos arquivos. Se os arquivos já tiverem sido baixados, ele identificará a presença dos mesmos e não fará um novo `download`.
+
+```{r results='hide'}
+urls = c(
+			"http://geoservicos.inde.gov.br/geoserver/SPM/wms?service=WFS&version=1.0.0&request=GetFeature&typeName=SPM:ODM_2009&outputFormat=CSV",
+			"http://geoservicos.inde.gov.br/geoserver/SPM/wms?service=WFS&version=1.0.0&request=GetFeature&typeName=SPM:ODM_2010&outputFormat=CSV",
+			"http://geoservicos.inde.gov.br/geoserver/SPM/wms?service=WFS&version=1.0.0&request=GetFeature&typeName=SPM:ODM_2011&outputFormat=CSV"
+		)
+
+# Cria um vetor com os nomes dos arquivos
+files.names = map_chr(urls, str_extract, "ODM_\\d{4}") %>% paste0(".csv")
+
+# Verifica os arquivos que ainda não foram baixados
+files.not.downloades.indexes = !map_lgl(files.names, file.exists)
+
+# Baixa os arquivos que estão faltando
+map2(urls[files.not.downloades.indexes],  files.names[files.not.downloades.indexes], download.file)
+```
+
+## Carregando os dados
+
+Primeiramente inicializamos algumas variáveis auxiliares:
+
+```{r}
+bibliotecas = c("utils::read.csv", "readr::read_csv", "data.table::fread")
+tempos.carga = integer(3)
+names(tempos.carga) = bibliotecas
+```
+
+Depois realizamos a carga, medindo o tempo, de cada uma das [Várias alternativas]
+
+### utils:: read.csv
+```{r message=FALSE}
+time.init = Sys.time()
+
+df = read.csv(files.names[1])
+df = read.csv(files.names[2])
+df = read.csv(files.names[3])
+
+tempos.carga[1] = as.double(Sys.time() - time.init)
+```
+
+### readr:: read_csv
+```{r message=FALSE}
+time.init = Sys.time()
+
+df = read_csv(files.names[1])
+df = read_csv(files.names[2])
+df = read_csv(files.names[3])
+
+tempos.carga[2] = as.double(Sys.time() - time.init)
+```
+
+### data.table:: fread
+```{r message=FALSE}
+time.init = Sys.time()
+
+df = fread(files.names[1])
+df = fread(files.names[2])
+df = fread(files.names[3])
+
+tempos.carga[3] = as.double(Sys.time() - time.init)
+```
+
+## Visualizando o resultado
+
+```{r echo=FALSE}
+medidas.ordenadas = tempos.carga %>%
+  sort(decreasing = TRUE)
+
+tibble(Função =  bibliotecas, "Tempo(s)" = medidas.ordenadas) %>%
+  kable()
+```
+
+```{r echo=FALSE}
+# Plota resultados
+medidas.ordenadas %>%
+  sort(decreasing = TRUE) %>%
+  barplot(main = "Análise de desempenho de carga de Data Frames",
+          ylab = "Tempo de carga (s)",
+          xlab = "Bibliotecas",
+          col = c("#e0e0e0", "#e0e0e0","#66BB6A"))
+```
+
+Após a primeira análise, verificamos que a função `utils::read.csv` é extremamente lenta (`r round(tempos.carga[1]/tempos.carga[2], 2)` x mais lenta que a `read_csv`). O fato de ela ser um *outlier* dificulta um pouco a comparação entre as duas melhores: `readr::read_csv`e `data.table::fread`.
+
+Para visualizar melhor as bibliotecas que se destacaram positivamente, vamos novamente plotar o gráfico, agora considerando apenas essas duas opções.
+
+## Visualizando apenas as mais relevantes: `readr::read_csv` e `data.table::fread`
+
+```{r echo=FALSE}
+# Plota resultados
+medidas.ordenadas [2:3] %>%
+  sort(decreasing = TRUE) %>%
+  barplot(main = "Análise de desempenho de carga de Data Frames",
+          ylab = "Tempo de carga (s)",
+          xlab = "Bibliotecas",
+          col = c("#e0e0e0" ,"#66BB6A"))
+```
+
+Notamos agoa que a função `data.table::fread` é `r round(tempos.carga[2]/tempos.carga[3], 2)` x mais rápida que a `readr:read_csv`.
+
+# Conclusão
+
+A partir dos testes e resultados alcançados podemos concluir:
+
+> Dentre as três funções analisadas, a forma mais eficiente de carregar um arquivo **CSV** em um data frame para a sua sessão **`R`**, é utlizando a função **`data.table::fread`**. O uso dela representa uma carga cerca de **`r round(tempos.carga[1]/tempos.carga[3], 2)` x mais rápida** em relação à função nativa **`utils::read.csv`**.
+
+O código fonte deste markdown encontra-se [aqui](https://github.com/fredpolicarpo/read-csv-performance-test).
+
+E por último, alguns links para saber um pouco mais sobre mim:
+
+* [Meu LinkedIn](https://www.linkedin.com/in/fredpolicarpo)
+* [Meu GitHub](https://github.com/fredpolicarpo)
+* [Minha página pessoal](https://fredpolicarpo.github.io/)
